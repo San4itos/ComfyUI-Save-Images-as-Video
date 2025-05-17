@@ -1,0 +1,15 @@
+[project]
+name = "save-images-as-video"
+description = "A custom node for ComfyUI to save image sequences as video files using FFmpeg. Supports various codecs, audio muxing, and in-node previews."
+version = "1.0.0"
+license = {file = "LICENSE"}
+dependencies = ["# torch", "# torchaudio", "# numpy", "Pillow"]
+
+[project.urls]
+Repository = "https://github.com/San4itos/ComfyUI-Save-Images-as-Video"
+#  Used by Comfy Registry https://comfyregistry.org
+
+[tool.comfy]
+PublisherId = ""
+DisplayName = "ComfyUI-Save-Images-as-Video"
+Icon = ""
