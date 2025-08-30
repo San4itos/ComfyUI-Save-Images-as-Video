@@ -30,6 +30,7 @@ class SaveFramesToVideoFFmpeg:
                 "fps": ("FLOAT", {"default": 24.0, "min": 1.0, "max": 120.0, "step": 1.0}),
                 "codec": (["libx264", "libx265", "libvpx-vp9", "libsvtav1"], {"default": "libx264"}),
                 "pixel_format": (["yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le", "rgb24"], {"default": "yuv420p"}),
+                "crf": ("INT", {"default": 23, "min": 0, "max": 63, "step": 1, "tooltip": "Constant Rate Factor (CRF). Lower values = higher quality, larger file size. Good range: 18-28 for x264/x265, 25-35 for AV1/VP9."}),
                 "output_format": (["mp4", "webm", "mov", "avi", "mkv"], {"default": "mp4"}),
             },
             "optional": {
@@ -45,7 +46,7 @@ class SaveFramesToVideoFFmpeg:
     OUTPUT_NODE = True
     CATEGORY = "San4itos"
 
-    def save_video(self, images, filename_prefix, fps, codec, pixel_format, output_format, 
+    def save_video(self, images, filename_prefix, fps, codec, pixel_format, crf, output_format, 
                    audio=None, audio_codec="aac", audio_bitrate="192k",
                    prompt=None, extra_pnginfo=None):
         
@@ -109,9 +110,11 @@ class SaveFramesToVideoFFmpeg:
             elif audio is not None: log_node_warning(self.NODE_LOG_PREFIX, f"Audio input not expected format. Type: {type(audio)}. Skipping.")
             
             ffmpeg_cmd.extend(['-c:v', codec, '-pix_fmt', pixel_format])
-            if codec in ["libx264", "libx265"]: ffmpeg_cmd.extend(['-crf', '19'])
-            # if codec in ["libaom-av1"]: ffmpeg_cmd.extend(['-crf', '23'])
-            if codec in ["libsvtav1"]: ffmpeg_cmd.extend(['-crf', '35'])
+            
+            # Уніфікована логіка для CRF
+            if codec in ["libx264", "libx265", "libsvtav1", "libvpx-vp9"]:
+                ffmpeg_cmd.extend(['-crf', str(crf)])
+
             if output_format in ["mp4", "mov"]: ffmpeg_cmd.extend(['-movflags', '+faststart'])
                         
             if has_audio_input:
@@ -138,7 +141,7 @@ class SaveFramesToVideoFFmpeg:
                     if stderr.strip(): log_node_warning(self.NODE_LOG_PREFIX, f"ffmpeg stderr (warnings):\n{stderr}", msg_color_override="GREY")
                     
                     preview_files_for_ui = [{"filename": video_filename_with_counter, "subfolder": subfolder_relative_to_output, "type": self.type}]
-                    ui_response_content = {"images": preview_files_for_ui, "animated": (True,)} 
+                    ui_response_content = {"images": preview_files_for_ui, "animated": (True,)}
                     return {"ui": ui_response_content}
             except subprocess.TimeoutExpired:
                 process.kill(); stdout, stderr = process.communicate()
