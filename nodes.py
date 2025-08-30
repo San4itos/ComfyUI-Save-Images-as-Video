@@ -177,5 +177,154 @@ class SaveFramesToVideoFFmpeg:
         return Image.fromarray(image_np)
 
 
-NODE_CLASS_MAPPINGS = {"SaveFramesToVideoFFmpeg_san4itos": SaveFramesToVideoFFmpeg}
-NODE_DISPLAY_NAME_MAPPINGS = {"SaveFramesToVideoFFmpeg_san4itos": "Save Images to Video (FFmpeg)"}
+class ConvertVideoFFmpeg:
+    NODE_LOG_PREFIX = "ConvertVideoFFMPEG"
+
+    def __init__(self):
+        self.output_dir = folder_paths.get_output_directory()
+        self.type = "output"
+        self.ffmpeg_executable_path = get_ffmpeg_path()
+        log_node_debug(self.NODE_LOG_PREFIX, f"Instance initialized. Will use ffmpeg at: {self.ffmpeg_executable_path}")
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "video": ("VIDEO",),
+                "filename_prefix": ("STRING", {"default": "VID_conv"}),
+                "codec": (["libx264", "libx265", "libvpx-vp9", "libsvtav1", "copy"], {"default": "libx264"}),
+                "pixel_format": (["yuv420p", "yuv422p", "yuv444p", "yuv420p10le", "yuv422p10le", "yuv444p10le", "rgb24", "copy"], {"default": "yuv420p"}),
+                "crf": ("INT", {"default": 23, "min": 0, "max": 63, "step": 1, "tooltip": "Constant Rate Factor (CRF). Lower values = higher quality. Ignored if codec is 'copy'."}),
+                "output_format": (["mp4", "webm", "mov", "avi", "mkv"], {"default": "mp4"}),
+                "audio_handling": (["copy original", "replace with new", "remove audio"], {"default": "copy original"}),
+            },
+            "optional": {
+                "audio": ("AUDIO", {}),
+                "audio_codec": (["aac", "mp3", "libopus", "copy"], {"default": "aac"}),
+                "audio_bitrate": (["96k", "128k", "160k", "192k", "256k", "320k"], {"default": "192k"}),
+            },
+            "hidden": {"prompt": "PROMPT", "extra_pnginfo": "EXTRA_PNGINFO"},
+        }
+
+    RETURN_TYPES = ()
+    FUNCTION = "convert_video"
+    OUTPUT_NODE = True
+    CATEGORY = "San4itos"
+
+    def convert_video(self, video, filename_prefix, codec, pixel_format, crf, output_format, audio_handling,
+                      audio=None, audio_codec="aac", audio_bitrate="192k",
+                      prompt=None, extra_pnginfo=None):
+        
+        log_node_info(self.NODE_LOG_PREFIX, "Decoding video to frames using ComfyUI's API...")
+        try:
+            components = video.get_components()
+        except Exception as e:
+            error_msg = f"Failed to get video components from the input. Error: {e}"
+            log_node_error(self.NODE_LOG_PREFIX, error_msg)
+            return {"ui": {"text": [error_msg]}}
+
+        images = components.images
+        source_audio = components.audio
+        source_fps = float(components.frame_rate)
+
+        if not isinstance(images, torch.Tensor) or images.ndim != 4 or images.shape[0] == 0:
+            error_msg = f"Video components did not contain valid images. Shape: {images.shape if hasattr(images, 'shape') else 'N/A'}"
+            log_node_error(self.NODE_LOG_PREFIX, error_msg)
+            return {"ui": {"text": [error_msg]}}
+
+        # Визначаємо, яке аудіо використовувати
+        final_audio = None
+        if audio_handling == "copy original":
+            final_audio = source_audio
+            log_node_info(self.NODE_LOG_PREFIX, "Using original audio from source video.")
+        elif audio_handling == "replace with new":
+            final_audio = audio
+            log_node_info(self.NODE_LOG_PREFIX, "Attempting to use new audio input.")
+        elif audio_handling == "remove audio":
+            final_audio = None
+            log_node_info(self.NODE_LOG_PREFIX, "Removing audio.")
+
+        # Решта логіки ідентична до SaveFramesToVideoFFmpeg, тому ми її просто використовуємо тут
+        h, w = images[0].shape[0], images[0].shape[1]
+        full_output_folder, filename_part_returned, counter, subfolder_relative_to_output, _ = folder_paths.get_save_image_path(
+            filename_prefix, self.output_dir, w, h
+        )
+        cleaned_filename_part = filename_part_returned.rstrip('_')
+        video_filename_with_counter = f"{cleaned_filename_part}_{counter:05}_.{output_format}"
+        video_full_path = os.path.join(full_output_folder, video_filename_with_counter)
+
+        temp_audio_file_for_ffmpeg = None
+        with tempfile.TemporaryDirectory() as temp_dir:
+            frame_paths = []
+            for i, image_tensor in enumerate(images):
+                img_pil = Image.fromarray((image_tensor.cpu().numpy() * 255).astype(np.uint8))
+                frame_filename = os.path.join(temp_dir, f"frame_{i:06d}.png")
+                img_pil.save(frame_filename, "PNG")
+                frame_paths.append(frame_filename)
+
+            ffmpeg_cmd = [self.ffmpeg_executable_path, '-y', '-framerate', str(source_fps), '-i', os.path.join(temp_dir, 'frame_%06d.png')]
+            has_audio_input = False
+
+            if final_audio is not None and isinstance(final_audio, dict) and "waveform" in final_audio and "sample_rate" in final_audio:
+                waveform_tensor, sample_rate = final_audio["waveform"], final_audio["sample_rate"]
+                if waveform_tensor.numel() > 0:
+                    try:
+                        temp_audio_file_for_ffmpeg = os.path.join(temp_dir, "temp_audio.wav")
+                        torchaudio.save(temp_audio_file_for_ffmpeg, waveform_tensor[0].cpu(), sample_rate)
+                        ffmpeg_cmd.extend(['-i', temp_audio_file_for_ffmpeg])
+                        has_audio_input = True
+                        log_node_info(self.NODE_LOG_PREFIX, "Audio input prepared for FFmpeg.")
+                    except Exception as e_asave:
+                        log_node_warning(self.NODE_LOG_PREFIX, f"Could not process audio: {e_asave}. Proceeding without audio.")
+                else:
+                    log_node_warning(self.NODE_LOG_PREFIX, "Audio waveform is empty. Skipping audio.")
+
+            if codec == "copy":
+                log_node_warning(self.NODE_LOG_PREFIX, "Codec 'copy' is not applicable when converting from frames. Defaulting to 'libx264'.")
+                codec = 'libx264'
+            
+            ffmpeg_cmd.extend(['-c:v', codec])
+            if codec in ["libx264", "libx265", "libsvtav1", "libvpx-vp9"]:
+                ffmpeg_cmd.extend(['-crf', str(crf)])
+
+            if pixel_format != "copy":
+                ffmpeg_cmd.extend(['-pix_fmt', pixel_format])
+
+            if has_audio_input:
+                ffmpeg_cmd.extend(['-c:a', audio_codec, '-b:a', audio_bitrate, '-shortest'])
+            else:
+                ffmpeg_cmd.extend(['-an'])
+
+            if output_format in ["mp4", "mov"]:
+                ffmpeg_cmd.extend(['-movflags', '+faststart'])
+
+            ffmpeg_cmd.append(video_full_path)
+
+            log_node_info(self.NODE_LOG_PREFIX, f"Executing ffmpeg: {' '.join(ffmpeg_cmd)}")
+            try:
+                process = subprocess.Popen(ffmpeg_cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True, encoding='utf-8')
+                stdout, stderr = process.communicate(timeout=300)
+                if process.returncode != 0:
+                    err_msg = f"ffmpeg error (code {process.returncode}):\nSTDOUT:\n{stdout}\nSTDERR:\n{stderr}"
+                    log_node_error(self.NODE_LOG_PREFIX, err_msg)
+                    return {"ui": {"text": [f"ffmpeg error (code {process.returncode}): Check console for details."]}}
+                else:
+                    log_node_success(self.NODE_LOG_PREFIX, f"Video saved: {video_full_path}")
+                    preview_files_for_ui = [{"filename": video_filename_with_counter, "subfolder": subfolder_relative_to_output, "type": self.type}]
+                    return {"ui": {"videos": preview_files_for_ui}}
+            except Exception as e:
+                log_node_error(self.NODE_LOG_PREFIX, f"Python error during ffmpeg execution: {e}")
+                return {"ui": {"text": [f"Python error: {e}"]}}
+            finally:
+                if temp_audio_file_for_ffmpeg and os.path.exists(temp_audio_file_for_ffmpeg):
+                    os.remove(temp_audio_file_for_ffmpeg)
+
+
+NODE_CLASS_MAPPINGS = {
+    "SaveFramesToVideoFFmpeg_san4itos": SaveFramesToVideoFFmpeg,
+    "ConvertVideoFFmpeg_san4itos": ConvertVideoFFmpeg,
+}
+NODE_DISPLAY_NAME_MAPPINGS = {
+    "SaveFramesToVideoFFmpeg_san4itos": "Save Images to Video (FFmpeg)",
+    "ConvertVideoFFmpeg_san4itos": "Convert Video (FFmpeg)",
+}
