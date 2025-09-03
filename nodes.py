@@ -8,6 +8,8 @@ from PIL import Image
 import folder_paths
 import torch
 import torchaudio
+import json
+from comfy.cli_args import args
 from .ffmpeg_path_resolver import get_ffmpeg_path
 from .node_logger import log_node_info, log_node_success, log_node_error, log_node_warning, log_node_debug 
 
@@ -80,7 +82,7 @@ class SaveFramesToVideoFFmpeg(FFmpegConverterBase):
 
     @classmethod
     def INPUT_TYPES(cls):
-           return {
+        return {
             "required": {
                 "images": ("IMAGE",),
                 "filename_prefix": ("STRING", {"default": "VID"}),
@@ -95,6 +97,10 @@ class SaveFramesToVideoFFmpeg(FFmpegConverterBase):
                 "audio_codec": (["aac", "mp3", "libopus", "copy"], {"default": "aac"}),
                 "audio_bitrate": (["96k", "128k", "160k", "192k", "256k", "320k"], {"default": "192k"}),
                 "output_file_opt": ("STRING", {"multiline": True, "default": "-preset medium", "tooltip": "Custom FFmpeg output options. One option per line, e.g., -preset slow"}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO"
             }
         }
 
@@ -104,7 +110,8 @@ class SaveFramesToVideoFFmpeg(FFmpegConverterBase):
     CATEGORY = "San4itos"
 
     def save_video(self, images, filename_prefix, fps, codec, pixel_format, crf, output_format, 
-                   audio=None, audio_codec="aac", audio_bitrate="192k", output_file_opt=""):
+                   audio=None, audio_codec="aac", audio_bitrate="192k", output_file_opt="", 
+                   prompt=None, extra_pnginfo=None):
         
         h, w = images[0].shape[0], images[0].shape[1]
         full_output_folder, filename_part, counter, subfolder, _ = folder_paths.get_save_image_path(filename_prefix, self.output_dir, w, h)
@@ -127,11 +134,28 @@ class SaveFramesToVideoFFmpeg(FFmpegConverterBase):
                 torchaudio.save(temp_audio_file, waveform_tensor[0].cpu(), audio["sample_rate"])
                 ffmpeg_cmd.extend(['-i', temp_audio_file])
 
+            # Prepare metadata
+            metadata_dict = {}
+            if not args.disable_metadata:
+                if prompt is not None:
+                    metadata_dict["prompt"] = prompt
+                if extra_pnginfo is not None:
+                    metadata_dict.update(extra_pnginfo)
+            
             base_params = {
                 '-c:v': codec,
                 '-pix_fmt': pixel_format,
                 '-crf': crf
             }
+            
+            # Add metadata to base_params if available
+            # NOTE: We use the "unsafe" format without explicit shell quoting here.
+            # This is required for ComfyUI's metadata reader to correctly parse the embedded JSON.
+            # While this could be fragile with special characters, it's the only format currently known to work.
+            if metadata_dict:
+                import json
+                metadata_json = json.dumps(metadata_dict)
+                base_params['-metadata'] = f'comment={metadata_json}'
             
             final_params = self._build_ffmpeg_params(base_params, output_file_opt, self.NODE_LOG_PREFIX)
             ffmpeg_cmd.extend(final_params)
@@ -201,6 +225,10 @@ class ConvertVideoFFmpeg(FFmpegConverterBase):
                 "audio_codec": (["aac", "mp3", "libopus"], {"default": "aac"}),
                 "audio_bitrate": (["96k", "128k", "160k", "192k", "256k", "320k"], {"default": "192k"}),
                 "output_file_opt": ("STRING", {"multiline": True, "default": "-preset medium", "tooltip": "Custom FFmpeg output options. One option per line, e.g., -preset slow"}),
+            },
+            "hidden": {
+                "prompt": "PROMPT",
+                "extra_pnginfo": "EXTRA_PNGINFO"
             }
         }
 
@@ -210,11 +238,20 @@ class ConvertVideoFFmpeg(FFmpegConverterBase):
     CATEGORY = "San4itos"
 
     def convert_video(self, video, filename_prefix, codec, pixel_format, crf, output_format, audio_handling,
-                      audio=None, audio_codec="aac", audio_bitrate="192k", output_file_opt=""):
+                      audio=None, audio_codec="aac", audio_bitrate="192k", output_file_opt="",
+                      prompt=None, extra_pnginfo=None):
 
         full_output_folder, filename_part, counter, subfolder, _ = folder_paths.get_save_image_path(filename_prefix, self.output_dir, 0, 0)
         video_filename = f"{filename_part}_{counter:05}_.{output_format}"
         video_full_path = os.path.join(full_output_folder, video_filename)
+
+        # Prepare metadata
+        metadata_dict = {}
+        if not args.disable_metadata:
+            if prompt is not None:
+                metadata_dict["prompt"] = prompt
+            if extra_pnginfo is not None:
+                metadata_dict.update(extra_pnginfo)
 
         is_direct_path = hasattr(video, '_is_direct_path')
 
@@ -230,6 +267,15 @@ class ConvertVideoFFmpeg(FFmpegConverterBase):
 
             final_params = self._build_ffmpeg_params(base_params, output_file_opt, self.NODE_LOG_PREFIX)
             ffmpeg_cmd.extend(final_params)
+
+            # Add metadata to base_params if available
+            # NOTE: We use the "unsafe" format without explicit shell quoting here.
+            # This is required for ComfyUI's metadata reader to correctly parse the embedded JSON.
+            # While this could be fragile with special characters, it's the only format currently known to work.
+            if metadata_dict:
+                import json
+                metadata_json = json.dumps(metadata_dict)
+                base_params['-metadata'] = f'comment={metadata_json}'
 
             if audio_handling == "copy original": ffmpeg_cmd.extend(['-c:a', 'copy'])
             elif audio_handling == "remove audio": ffmpeg_cmd.extend(['-an'])
@@ -257,6 +303,16 @@ class ConvertVideoFFmpeg(FFmpegConverterBase):
                     ffmpeg_cmd.extend(['-i', temp_audio_file])
 
                 base_params = {'-c:v': codec if codec != "copy" else "libx264", '-pix_fmt': pixel_format, '-crf': crf}
+                
+                # Add metadata to base_params if available
+                # NOTE: We use the "unsafe" format without explicit shell quoting here.
+                # This is required for ComfyUI's metadata reader to correctly parse the embedded JSON.
+                # While this could be fragile with special characters, it's the only format currently known to work.
+                if metadata_dict:
+                    import json
+                    metadata_json = json.dumps(metadata_dict)
+                    base_params['-metadata'] = f'comment={metadata_json}'
+                    
                 final_params = self._build_ffmpeg_params(base_params, output_file_opt, self.NODE_LOG_PREFIX)
                 ffmpeg_cmd.extend(final_params)
 
