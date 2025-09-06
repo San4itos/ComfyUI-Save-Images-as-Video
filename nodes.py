@@ -265,17 +265,20 @@ class ConvertVideoFFmpeg(FFmpegConverterBase):
             if pixel_format != 'copy': base_params['-pix_fmt'] = pixel_format
             if codec not in ['copy']: base_params['-crf'] = crf
 
-            final_params = self._build_ffmpeg_params(base_params, output_file_opt, self.NODE_LOG_PREFIX)
-            ffmpeg_cmd.extend(final_params)
-
             # Add metadata to base_params if available
             # NOTE: We use the "unsafe" format without explicit shell quoting here.
             # This is required for ComfyUI's metadata reader to correctly parse the embedded JSON.
             # While this could be fragile with special characters, it's the only format currently known to work.
             if metadata_dict:
-                import json
-                metadata_json = json.dumps(metadata_dict)
-                base_params['-metadata'] = f'comment={metadata_json}'
+                if os.name == 'nt':
+                    log_node_warning(self.NODE_LOG_PREFIX, "Skipping metadata on Windows due to command line length limitations.")
+                else:
+                    import json
+                    metadata_json = json.dumps(metadata_dict)
+                    base_params['-metadata'] = f'comment={metadata_json}'
+
+            final_params = self._build_ffmpeg_params(base_params, output_file_opt, self.NODE_LOG_PREFIX)
+            ffmpeg_cmd.extend(final_params)
 
             if audio_handling == "copy original": ffmpeg_cmd.extend(['-c:a', 'copy'])
             elif audio_handling == "remove audio": ffmpeg_cmd.extend(['-an'])
