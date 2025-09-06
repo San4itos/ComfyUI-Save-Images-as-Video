@@ -13,7 +13,6 @@ A custom node for ComfyUI to save image sequences as video files using FFmpeg. S
 *   **Video Codecs**: libx264, libx265, mpeg4, libvpx-vp9, libsvtav1, and `copy` mode for converting.
 *   **Configurable**: Set FPS, pixel format, CRF (quality), and custom FFmpeg parameters.
 *   **Audio Support**: Mux existing audio, add new audio tracks, or remove audio. Supports AAC, MP3, libopus, and `copy`.
-*   **Metadata Embedding**: Automatically embeds ComfyUI workflow metadata into output video files.
 
 ## Installation
 
@@ -84,4 +83,4 @@ You can view the generated videos in the ComfyUI queue by pressing the 'Q' key.
 ## Використання
 Підключіть вихід `IMAGE` до входу `images`. Налаштуйте параметри за потребою. Опціонально підключіть вхід `AUDIO`. Для вузла конвертації з'єднайте вихід вузла `Load Video by Path` з входом `VIDEO`. Хоча конвертер може приймати відео від стандартного завантажувача ComfyUI, це неефективно, оскільки змушує виконувати проміжну конвертацію у зображення. Вузол `Load Video by Path` створений спеціально для прямої передачі шляху до файлу, що забезпечує набагато швидше перекодування.
 
-Переглянути створені відео можна у черзі ComfyUI, натиснувши клавішу Q.�на у черзі ComfyUI, натиснувши клавішу Q.
+Переглянути створені відео можна у черзі ComfyUI, натиснувши клавішу Q.�на у черзі ComfyUI, натиснувши клавішу Q.
